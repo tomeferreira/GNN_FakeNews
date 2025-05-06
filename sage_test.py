@@ -39,7 +39,7 @@ class GraphSAGE(torch.nn.Module):
         x = F.dropout(x, p=0.5, training=self.training)
         x = self.lin2(x)
         return F.log_softmax(x, dim=-1)
-    
+
 def main():
 
 	wandb.init(

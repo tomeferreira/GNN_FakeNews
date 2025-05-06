@@ -1,0 +1,182 @@
+import torch
+import torch.nn.functional as F
+from torch_geometric.datasets import UPFD
+from torch_geometric.nn import global_mean_pool,GCNConv
+from torch_geometric.nn.conv import SAGEConv
+from torch_geometric.nn.dense import Linear
+from torch_geometric.loader import DataLoader
+import wandb
+import yaml
+
+'''
+Code from: https://wandb.ai/graph-neural-networks/GraphSAGE/reports/An-Introduction-to-GraphSAGE--Vmlldzo1MTEwNzQ1
+'''
+class GraphSAGE(torch.nn.Module):
+    def __init__(self, dataset, num_layers, hidden):
+        super().__init__()
+        self.conv1 = SAGEConv(dataset.num_features, hidden)
+        self.convs = torch.nn.ModuleList()
+        for i in range(num_layers - 1):
+            self.convs.append(SAGEConv(hidden, hidden))
+        self.lin1 = Linear(hidden, hidden)
+        self.lin2 = Linear(hidden, dataset.num_classes)
+
+
+    def reset_parameters(self):
+        self.conv1.reset_parameters()
+        for conv in self.convs:
+            conv.reset_parameters()
+        self.lin1.reset_parameters()
+        self.lin2.reset_parameters()
+
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        x = F.relu(self.conv1(x, edge_index))
+        for conv in self.convs:
+            x = F.relu(conv(x, edge_index))
+        x = global_mean_pool(x, batch)
+        x = F.relu(self.lin1(x))
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.lin2(x)
+        return F.log_softmax(x, dim=-1)
+    
+class GCN(torch.nn.Module):
+	def __init__(self, in_channels, hidden_channels, out_channels):
+		super().__init__()
+		self.conv1 = GCNConv(in_channels, hidden_channels)
+		self.conv2 = GCNConv(hidden_channels, hidden_channels)
+		self.lin = torch.nn.Linear(hidden_channels, out_channels)
+
+	def forward(self, x, edge_index, batch):
+		x = self.conv1(x, edge_index)
+		x = F.relu(x)
+		x = self.conv2(x, edge_index)
+		x = F.relu(x)
+		x = global_mean_pool(x, batch)  # Pool node features into graph-level representation
+		return self.lin(x)    
+
+def main():
+
+	wandb.init()
+      
+	config = wandb.config
+
+	train_dataset = UPFD(root='data/', name='politifact', feature='bert', split='train')
+	val_dataset = UPFD(root='data/', name='politifact', feature='bert', split='val')
+	test_dataset = UPFD(root='data/', name='politifact', feature='bert', split='test')
+
+	train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
+	val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
+	test_loader = DataLoader(test_dataset, batch_size=config.batch_size)
+
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+	if config.architecture == 'GraphSAGE':
+
+		model = GraphSAGE(
+			dataset=train_dataset,         # Needed for num_features and num_classes
+			num_layers=config.num_layers,                  # You can tune this (e.g., 2 or 3)
+			hidden=config.hidden_channels                      # Matches config
+		).to(device)
+
+		optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+		criterion = torch.nn.CrossEntropyLoss()
+		
+		def train():
+			model.train()
+			total_loss = 0
+			for data in train_loader:
+				data = data.to(device)
+				optimizer.zero_grad()
+				out = model(data)
+				loss = criterion(out, data.y)
+				loss.backward()
+				optimizer.step()
+				total_loss += loss.item() * data.num_graphs
+			return total_loss / len(train_loader.dataset)
+		
+		def evaluate(loader):
+			model.eval()
+			correct = 0
+			for data in loader:
+				data = data.to(device)
+				out = model(data)
+				pred = out.argmax(dim=1)
+				correct += int((pred == data.y).sum())
+			return correct / len(loader.dataset)
+
+		for epoch in range(1, 101):
+			loss = train()
+			val_acc = evaluate(val_loader)
+			test_acc = evaluate(test_loader)
+			wandb.log({
+				"epoch": epoch,
+				"loss": loss,
+				"val_acc": val_acc,
+				"test_acc": test_acc
+			})
+			# wandb.watch(model, log="all", log_freq=10)
+			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
+    
+	elif config.architecture == 'GCN':
+            
+		# Instantiate model, optimizer, and define training
+		model = GCN(
+			in_channels=train_dataset.num_node_features,
+			hidden_channels=config.hidden_channels,
+			out_channels=2  # Binary classification (real/fake)
+		).to(device)
+
+		optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+		criterion = torch.nn.CrossEntropyLoss()
+
+		def train():
+			model.train()
+			total_loss = 0
+			for data in train_loader:
+				data = data.to(device)
+				optimizer.zero_grad()
+				out = model(data.x, data.edge_index, data.batch)
+				loss = criterion(out, data.y)
+				loss.backward()
+				optimizer.step()
+				total_loss += loss.item() * data.num_graphs
+			return total_loss / len(train_loader.dataset)
+
+		def evaluate(loader):
+			model.eval()
+			correct = 0
+			for data in loader:
+				data = data.to(device)
+				out = model(data.x, data.edge_index, data.batch)
+				pred = out.argmax(dim=1)
+				correct += int((pred == data.y).sum())
+			return correct / len(loader.dataset)
+
+		for epoch in range(1, 251):
+			loss = train()
+			val_acc = evaluate(val_loader)
+			test_acc = evaluate(test_loader)
+			wandb.log({
+				"epoch": epoch,
+				"loss": loss,
+				"val_acc": val_acc,
+				"test_acc": test_acc
+			})
+			# wandb.watch(model, log="all", log_freq=10)
+			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
+
+	wandb.finish()
+
+	return
+
+if __name__=='__main__':
+	with open("sweep.yaml", "r") as f:
+		sweep_config = yaml.safe_load(f)
+
+	# Initialize sweep by passing in config.
+	sweep_id = wandb.sweep(sweep=sweep_config, project="gnn-fake-news")
+
+	# Start sweep job.
+	wandb.agent(sweep_id, function=main, count=4)

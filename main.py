@@ -12,35 +12,35 @@ import yaml
 Code from: https://wandb.ai/graph-neural-networks/GraphSAGE/reports/An-Introduction-to-GraphSAGE--Vmlldzo1MTEwNzQ1
 '''
 class GraphSAGE(torch.nn.Module):
-    def __init__(self, dataset, num_layers, hidden):
-        super().__init__()
-        self.conv1 = SAGEConv(dataset.num_features, hidden)
-        self.convs = torch.nn.ModuleList()
-        for i in range(num_layers - 1):
-            self.convs.append(SAGEConv(hidden, hidden))
-        self.lin1 = Linear(hidden, hidden)
-        self.lin2 = Linear(hidden, dataset.num_classes)
+	def __init__(self, dataset, num_layers, hidden):
+		super().__init__()
+		self.conv1 = SAGEConv(dataset.num_features, hidden)
+		self.convs = torch.nn.ModuleList()
+		for i in range(num_layers - 1):
+			self.convs.append(SAGEConv(hidden, hidden))
+		self.lin1 = Linear(hidden, hidden)
+		self.lin2 = Linear(hidden, dataset.num_classes)
 
 
-    def reset_parameters(self):
-        self.conv1.reset_parameters()
-        for conv in self.convs:
-            conv.reset_parameters()
-        self.lin1.reset_parameters()
-        self.lin2.reset_parameters()
+	def reset_parameters(self):
+		self.conv1.reset_parameters()
+		for conv in self.convs:
+			conv.reset_parameters()
+		self.lin1.reset_parameters()
+		self.lin2.reset_parameters()
 
 
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        x = F.relu(self.conv1(x, edge_index))
-        for conv in self.convs:
-            x = F.relu(conv(x, edge_index))
-        x = global_mean_pool(x, batch)
-        x = F.relu(self.lin1(x))
-        x = F.dropout(x, p=0.5, training=self.training)
-        x = self.lin2(x)
-        return F.log_softmax(x, dim=-1)
-    
+	def forward(self, data):
+		x, edge_index, batch = data.x, data.edge_index, data.batch
+		x = F.relu(self.conv1(x, edge_index))
+		for conv in self.convs:
+			x = F.relu(conv(x, edge_index))
+		x = global_mean_pool(x, batch)
+		x = F.relu(self.lin1(x))
+		x = F.dropout(x, p=0.5, training=self.training)
+		x = self.lin2(x)
+		return F.log_softmax(x, dim=-1)
+		
 class GCN(torch.nn.Module):
 	def __init__(self, in_channels, hidden_channels, out_channels):
 		super().__init__()
@@ -54,12 +54,40 @@ class GCN(torch.nn.Module):
 		x = self.conv2(x, edge_index)
 		x = F.relu(x)
 		x = global_mean_pool(x, batch)  # Pool node features into graph-level representation
-		return self.lin(x)    
+		return self.lin(x)	
+
+'''
+code from: https://www.geeksforgeeks.org/how-to-handle-overfitting-in-pytorch-models-using-early-stopping/
+'''
+class EarlyStopping:
+	def __init__(self, patience=5, delta=0):
+		self.patience = patience
+		self.delta = delta
+		self.best_score = None
+		self.early_stop = False
+		self.counter = 0
+		self.best_model_state = None
+
+	def __call__(self, val_loss, model):
+		score = -val_loss
+		if self.best_score is None:
+			self.best_score = score
+			self.best_model_state = model.state_dict()
+		elif score < self.best_score + self.delta:
+			self.counter += 1
+			if self.counter >= self.patience:
+				self.early_stop = True
+		else:
+			self.best_score = score
+			self.best_model_state = model.state_dict()
+			self.counter = 0
+	def load_best_model(self, model):
+		model.load_state_dict(self.best_model_state)
 
 def main():
 
 	wandb.init()
-      
+	  
 	config = wandb.config
 
 	train_dataset = UPFD(root='data/', name='politifact', feature='bert', split='train')
@@ -72,12 +100,14 @@ def main():
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+	early_stopping = EarlyStopping(patience=config.patience, delta=config.delta)
+
 	if config.architecture == 'GraphSAGE':
 
 		model = GraphSAGE(
-			dataset=train_dataset,         # Needed for num_features and num_classes
-			num_layers=config.num_layers,                  # You can tune this (e.g., 2 or 3)
-			hidden=config.hidden_channels                      # Matches config
+			dataset=train_dataset,		 # Needed for num_features and num_classes
+			num_layers=config.num_layers,				  # You can tune this (e.g., 2 or 3)
+			hidden=config.hidden_channels					  # Matches config
 		).to(device)
 
 		optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
@@ -106,7 +136,7 @@ def main():
 				correct += int((pred == data.y).sum())
 			return correct / len(loader.dataset)
 
-		for epoch in range(1, 101):
+		for epoch in range(500):
 			loss = train()
 			val_acc = evaluate(val_loader)
 			test_acc = evaluate(test_loader)
@@ -118,9 +148,13 @@ def main():
 			})
 			# wandb.watch(model, log="all", log_freq=10)
 			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
-    
+			early_stopping(loss, model)
+			if early_stopping.early_stop:
+				print("Early stopping")
+				break
+		
 	elif config.architecture == 'GCN':
-            
+			
 		# Instantiate model, optimizer, and define training
 		model = GCN(
 			in_channels=train_dataset.num_node_features,
@@ -154,7 +188,7 @@ def main():
 				correct += int((pred == data.y).sum())
 			return correct / len(loader.dataset)
 
-		for epoch in range(1, 251):
+		for epoch in range(500):
 			loss = train()
 			val_acc = evaluate(val_loader)
 			test_acc = evaluate(test_loader)
@@ -166,6 +200,10 @@ def main():
 			})
 			# wandb.watch(model, log="all", log_freq=10)
 			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
+			early_stopping(loss, model)
+			if early_stopping.early_stop:
+				print("Early stopping")
+				break
 
 	wandb.finish()
 
@@ -179,4 +217,4 @@ if __name__=='__main__':
 	sweep_id = wandb.sweep(sweep=sweep_config, project="gnn-fake-news")
 
 	# Start sweep job.
-	wandb.agent(sweep_id, function=main, count=4)
+	wandb.agent(sweep_id, function=main, count=50)

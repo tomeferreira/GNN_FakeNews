@@ -100,7 +100,7 @@ def main():
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-	early_stopping = EarlyStopping(patience=config.patience, delta=config.delta)
+	early_stopping = EarlyStopping(patience=15, delta=0.0005)
 
 	if config.architecture == 'GraphSAGE':
 

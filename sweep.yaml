@@ -19,12 +19,12 @@ parameters:
       - GraphSAGE
   weight_decay:
     distribution: uniform
-    min: 0.00025
+    min: 0.00001
     max: 0.001
   learning_rate:
     distribution: uniform
     min: 0.0005
-    max: 0.2
+    max: 0.01
   hidden_channels:
     distribution: int_uniform
     min: 32

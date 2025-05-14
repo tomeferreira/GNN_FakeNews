@@ -91,9 +91,9 @@ def main():
 	  
 	config = wandb.config
 
-	train_dataset = UPFD(root='data/', name='politifact', feature='bert', split='train')
-	val_dataset = UPFD(root='data/', name='politifact', feature='bert', split='val')
-	test_dataset = UPFD(root='data/', name='politifact', feature='bert', split='test')
+	train_dataset = UPFD(root='data/', name='politifact', feature=config.feature, split='train')
+	val_dataset = UPFD(root='data/', name='politifact', feature=config.feature, split='val')
+	test_dataset = UPFD(root='data/', name='politifact', feature=config.feature, split='test')
 
 	train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
 	val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
@@ -234,4 +234,6 @@ if __name__=='__main__':
 	sweep_id = wandb.sweep(sweep=sweep_config, project="gnn-fake-news")
 
 	# Start sweep job.
-	wandb.agent(sweep_id, function=main, count=50)
+	wandb.agent(sweep_id, function=main, count=100)
+
+	wandb.finish()

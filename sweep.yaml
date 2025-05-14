@@ -16,7 +16,10 @@ parameters:
     distribution: categorical
     values:
       - GCN
-      - GraphSAGE
+  feature:
+    distribution: categorical
+    values:
+      - spacy
   weight_decay:
     distribution: uniform
     min: 0.00001

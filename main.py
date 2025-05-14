@@ -5,6 +5,7 @@ from torch_geometric.nn import global_mean_pool,GCNConv
 from torch_geometric.nn.conv import SAGEConv
 from torch_geometric.nn.dense import Linear
 from torch_geometric.loader import DataLoader
+from sklearn.metrics import f1_score
 import wandb
 import yaml
 
@@ -128,26 +129,34 @@ def main():
 		
 		def evaluate(loader):
 			model.eval()
-			correct = 0
-			for data in loader:
-				data = data.to(device)
-				out = model(data)
-				pred = out.argmax(dim=1)
-				correct += int((pred == data.y).sum())
-			return correct / len(loader.dataset)
+			all_preds = []
+			all_labels = []
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					out = model(data)
+					pred = out.argmax(dim=1)
+					all_preds.extend(pred.cpu().numpy())
+					all_labels.extend(data.y.cpu().numpy())
+
+			acc = sum(p == t for p, t in zip(all_preds, all_labels)) / len(all_labels)
+			f1 = f1_score(all_labels, all_preds, average='binary')
+			return acc, f1
 
 		for epoch in range(500):
 			loss = train()
-			val_acc = evaluate(val_loader)
-			test_acc = evaluate(test_loader)
+			val_acc, val_f1 = evaluate(val_loader)
+			test_acc, test_f1 = evaluate(test_loader)
 			wandb.log({
 				"epoch": epoch,
 				"loss": loss,
 				"val_acc": val_acc,
-				"test_acc": test_acc
+				"val_f1": val_f1,
+				"test_acc": test_acc,
+				"test_f1": test_f1
 			})
 			# wandb.watch(model, log="all", log_freq=10)
-			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
+			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Val F1: {val_f1:.4f}, Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f}')
 			early_stopping(loss, model)
 			if early_stopping.early_stop:
 				print("Early stopping")
@@ -180,26 +189,34 @@ def main():
 
 		def evaluate(loader):
 			model.eval()
-			correct = 0
-			for data in loader:
-				data = data.to(device)
-				out = model(data.x, data.edge_index, data.batch)
-				pred = out.argmax(dim=1)
-				correct += int((pred == data.y).sum())
-			return correct / len(loader.dataset)
+			all_preds = []
+			all_labels = []
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					out = model(data.x, data.edge_index, data.batch)
+					pred = out.argmax(dim=1)
+					all_preds.extend(pred.cpu().numpy())
+					all_labels.extend(data.y.cpu().numpy())
+
+			acc = sum(p == t for p, t in zip(all_preds, all_labels)) / len(all_labels)
+			f1 = f1_score(all_labels, all_preds, average='binary')
+			return acc, f1
 
 		for epoch in range(500):
 			loss = train()
-			val_acc = evaluate(val_loader)
-			test_acc = evaluate(test_loader)
+			val_acc, val_f1 = evaluate(val_loader)
+			test_acc, test_f1 = evaluate(test_loader)
 			wandb.log({
 				"epoch": epoch,
 				"loss": loss,
 				"val_acc": val_acc,
-				"test_acc": test_acc
+				"val_f1": val_f1,
+				"test_acc": test_acc,
+				"test_f1": test_f1
 			})
 			# wandb.watch(model, log="all", log_freq=10)
-			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
+			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Val F1: {val_f1:.4f}, Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f}')
 			early_stopping(loss, model)
 			if early_stopping.early_stop:
 				print("Early stopping")

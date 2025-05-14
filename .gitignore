@@ -1,2 +1,6 @@
 wandb/*
 data/*
+
+# UV files
+pyproject.toml
+uv.lock

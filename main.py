@@ -17,8 +17,6 @@ def set_seed():
 	torch.manual_seed(SEED)
 	np.random.seed(SEED)
 	random.seed(SEED)
-	torch.backends.cudnn.deterministic = True
-	torch.backends.cudnn.benchmark = False
 	return
 
 '''
@@ -101,6 +99,8 @@ def main():
 
 	wandb.init()
 	  
+	set_seed()
+
 	config = wandb.config
 
 	train_dataset = UPFD(root='data/', name='politifact', feature=config.feature, split='train')

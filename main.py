@@ -110,9 +110,9 @@ def main():
 	g = torch.Generator()
 	g.manual_seed(SEED)
 
-	train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-	val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
-	test_loader = DataLoader(test_dataset, batch_size=config.batch_size)
+	train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, generator=g)
+	val_loader = DataLoader(val_dataset, batch_size=config.batch_size, generator=g)
+	test_loader = DataLoader(test_dataset, batch_size=config.batch_size, generator=g)
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -243,7 +243,7 @@ def main():
 
 if __name__=='__main__':
 	set_seed()
-	
+
 	with open("sweep.yaml", "r") as f:
 		sweep_config = yaml.safe_load(f)
 

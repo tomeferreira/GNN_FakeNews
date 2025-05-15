@@ -8,6 +8,18 @@ from torch_geometric.loader import DataLoader
 from sklearn.metrics import f1_score
 import wandb
 import yaml
+import random
+import numpy as np
+
+SEED = 42
+
+def set_seed():
+	torch.manual_seed(SEED)
+	np.random.seed(SEED)
+	random.seed(SEED)
+	torch.backends.cudnn.deterministic = True
+	torch.backends.cudnn.benchmark = False
+	return
 
 '''
 Code from: https://wandb.ai/graph-neural-networks/GraphSAGE/reports/An-Introduction-to-GraphSAGE--Vmlldzo1MTEwNzQ1
@@ -94,6 +106,9 @@ def main():
 	train_dataset = UPFD(root='data/', name='politifact', feature=config.feature, split='train')
 	val_dataset = UPFD(root='data/', name='politifact', feature=config.feature, split='val')
 	test_dataset = UPFD(root='data/', name='politifact', feature=config.feature, split='test')
+
+	g = torch.Generator()
+	g.manual_seed(SEED)
 
 	train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
 	val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
@@ -227,6 +242,8 @@ def main():
 	return
 
 if __name__=='__main__':
+	set_seed()
+	
 	with open("sweep.yaml", "r") as f:
 		sweep_config = yaml.safe_load(f)
 

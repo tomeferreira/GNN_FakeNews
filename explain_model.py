@@ -1,7 +1,7 @@
 from torch_geometric.explain import Explainer, GNNExplainer
 
 
-def explain_model(model, test_dataset, device, feat_path=None, top_k=10, subgraph_path=None):
+def explain_model(model, architecture, test_dataset, device, feat_path=None, top_k=10, subgraph_path=None):
     sample_data = test_dataset[0].to(device)
     explainer = Explainer(
         model=model,
@@ -17,12 +17,20 @@ def explain_model(model, test_dataset, device, feat_path=None, top_k=10, subgrap
     )
 
     node_index = min(0, sample_data.x.shape[0] - 1)
-    explanation = explainer(
-        x=sample_data.x,
-        edge_index=sample_data.edge_index,
-        batch=getattr(sample_data, "batch", None),
-        index=node_index
-    )
+
+    if architecture == 'GCN':
+        explanation = explainer(
+            x=sample_data.x,
+            edge_index=sample_data.edge_index,
+            batch=sample_data.batch,
+            index=node_index
+        )
+    elif architecture == 'GraphSAGE':
+        explanation = explainer(
+            x=sample_data.x,
+            edge_index=sample_data.edge_index,
+            index=node_index
+        )
 
     print(f'Generated explanations in {explanation.available_explanations}')
 

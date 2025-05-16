@@ -241,6 +241,7 @@ def main():
 	"""
 	explain_model(
 		model,
+		config.architecture,
 		test_dataset,
 		device,
 		feat_path=f'feature_importance_{config.architecture}.png',

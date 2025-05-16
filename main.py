@@ -5,6 +5,7 @@ from torch_geometric.nn import global_mean_pool,GCNConv
 from torch_geometric.nn.conv import SAGEConv
 from torch_geometric.nn.dense import Linear
 from torch_geometric.loader import DataLoader
+from explain_model import explain_model
 from sklearn.metrics import f1_score
 import wandb
 import yaml
@@ -236,6 +237,17 @@ def main():
 			if early_stopping.early_stop:
 				print("Early stopping")
 				break
+	
+	"""
+	explain_model(
+		model,
+		test_dataset,
+		device,
+		feat_path=f'feature_importance_{config.architecture}.png',
+		top_k=10,
+		subgraph_path=f'subgraph_{config.architecture}.png'
+	)
+	"""
 
 	wandb.finish()
 

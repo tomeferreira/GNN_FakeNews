@@ -1,6 +1,9 @@
 wandb/*
 data/*
 
+# Python cache
+__pycache__/
+
 # UV files
 pyproject.toml
 uv.lock

@@ -8,6 +8,10 @@ from torch_geometric.loader import DataLoader
 from sklearn.metrics import f1_score
 import random
 import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+import umap.umap_ as umap
+from explain_model import explain_model
 
 SEED = 42
 
@@ -49,6 +53,19 @@ class GraphSAGE(torch.nn.Module):
 		x = F.dropout(x, p=0.5, training=self.training)
 		x = self.lin2(x)
 		return F.log_softmax(x, dim=-1)
+
+	def get_embeddings(self, data, layer="last_hidden"):
+		x, edge_index, batch = data.x, data.edge_index, data.batch
+		x = F.relu(self.conv1(x, edge_index))
+		for conv in self.convs:
+			x = F.relu(conv(x, edge_index))
+		x = global_mean_pool(x, batch)
+
+		if layer == "last_hidden":
+			x = F.relu(self.lin1(x))  # optional: dropout if needed
+			return x.detach().cpu(), data.y.cpu()
+		elif layer == "before_pool":
+			return x.detach().cpu(), data.y.cpu()
 		
 class GCN(torch.nn.Module):
 	def __init__(self, in_channels, hidden_channels, out_channels):
@@ -95,13 +112,43 @@ class EarlyStopping:
 
 def main():
 
+	def plot_embeddings(embeddings, labels, method="tsne"):
+		if method == "tsne":
+			reducer = TSNE(n_components=2, perplexity=30, learning_rate=200, random_state=SEED)
+		elif method == "umap":
+			reducer = umap.UMAP(n_components=2,random_state=SEED)
+		else:
+			raise ValueError("Unknown method")
+
+		emb_2d = reducer.fit_transform(embeddings)
+
+		plt.figure(figsize=(13, 7))
+		scatter = plt.scatter(emb_2d[:, 0], emb_2d[:, 1], c=labels, cmap="tab10", alpha=0.7, marker='o')
+		plt.legend(*scatter.legend_elements(), title="Classes")
+		plt.title(f"{method.upper()} visualization of embeddings")
+		plt.show()
+	
+	def extract_embeddings(model, loader, device, layer="last_hidden"):
+		model.eval()
+		all_embeddings = []
+		all_labels = []
+
+		with torch.no_grad():
+			for data in loader:
+				data = data.to(device)
+				embeddings, labels = model.get_embeddings(data, layer=layer)
+				all_embeddings.append(embeddings)
+				all_labels.append(labels)
+
+		return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
+
 	architecture = 'GraphSAGE'
 	feature = 'bert'
-	batch_size = 31
-	num_layers = 1
-	hidden_channels = 69
-	learning_rate = 0.006484920505711627
-	weight_decay = 0.00005387688502652978
+	batch_size = 52
+	num_layers = 2
+	hidden_channels = 68
+	learning_rate = 0.009398316183710028
+	weight_decay = 0.0007282433810735896
 
 	train_dataset = UPFD(root='data/', name='politifact', feature=feature, split='train')
 	val_dataset = UPFD(root='data/', name='politifact', feature=feature, split='val')
@@ -119,6 +166,27 @@ def main():
 	early_stopping = EarlyStopping(patience=15, delta=0.0005)
 
 	if architecture == 'GraphSAGE':
+
+		def extract_embeddings_from_path(model, loader, device, checkpoint_path, layer="last_hidden"):
+			model = GraphSAGE(
+				dataset=train_dataset,
+				num_layers=num_layers,  # must match your config
+				hidden=hidden_channels      # same here
+			).to(device)
+
+			model.load_state_dict(torch.load(checkpoint_path))
+			model.eval()
+			all_embeddings = []
+			all_labels = []
+
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					embeddings, labels = model.get_embeddings(data, layer=layer)
+					all_embeddings.append(embeddings)
+					all_labels.append(labels)
+
+			return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
 
 		model = GraphSAGE(
 			dataset=train_dataset,		 # Needed for num_features and num_classes
@@ -158,15 +226,27 @@ def main():
 			f1 = f1_score(all_labels, all_preds, average='binary')
 			return acc, f1
 
+		list_paths = []
 		for epoch in range(500):
 			loss = train()
 			val_acc, val_f1 = evaluate(val_loader)
 			test_acc, test_f1 = evaluate(test_loader)
+			if epoch%10==0:
+				list_paths.append(f'model_epoch_{epoch}.pt')
+				torch.save(model.state_dict(), f'model_epoch_{epoch}.pt')
+			# 	plot_embeddings(embeddings.numpy(), labels.numpy(), method="umap")
 			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Val F1: {val_f1:.4f}, Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f}')
 			early_stopping(loss, model)
 			if early_stopping.early_stop:
 				print("Early stopping")
 				break
+
+		for path in list_paths:
+			embeddings_end, labels_end = extract_embeddings_from_path(model, test_loader, device, path, layer="last_hidden")
+			plot_embeddings(embeddings_end.numpy(), labels_end.numpy(), method="umap")
+		
+		embeddings_end, labels_end = extract_embeddings(model, test_loader, device, layer="last_hidden")
+		plot_embeddings(embeddings_end.numpy(), labels_end.numpy(), method="umap")
 		
 	elif architecture == 'GCN':
 			
@@ -218,6 +298,16 @@ def main():
 			if early_stopping.early_stop:
 				print("Early stopping")
 				break
+
+
+	explain_model(
+		model,
+		test_dataset,
+		device,
+		feat_path=f'feature_importance_GraphSAGE.png',
+		top_k=10,
+		subgraph_path=f'subgraph_GraphSAGE.png'
+	)
 
 	return
 

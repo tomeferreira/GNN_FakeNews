@@ -302,6 +302,7 @@ def main():
 
 	explain_model(
 		model,
+		architecture,
 		test_dataset,
 		device,
 		feat_path=f'feature_importance_GraphSAGE.png',

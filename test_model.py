@@ -109,17 +109,45 @@ class EarlyStopping:
 
 def main():
 
+	# gossipcop
 	architecture = 'GraphSAGE'
 	feature = 'profile'
-	batch_size = 56
+	batch_size = 39
 	num_layers = 2
-	hidden_channels = 98
-	learning_rate = 0.0006441931666212645
-	weight_decay = 0.00024963244437103125
+	hidden_channels = 49
+	learning_rate = 0.00440669368314588
+	weight_decay = 0.00022253693922412253
 
-	train_dataset = UPFD(root='data/', name='politifact', feature=feature, split='train')
-	val_dataset = UPFD(root='data/', name='politifact', feature=feature, split='val')
-	test_dataset = UPFD(root='data/', name='politifact', feature=feature, split='test')
+	# gossipcop
+	# architecture = 'GCN'
+	# feature = 'profile'
+	# batch_size = 18
+	# num_layers = 1
+	# hidden_channels = 104
+	# learning_rate = 0.0029089247546638395
+	# weight_decay = 0.00007003754983703259
+
+	# politifact
+	# architecture = 'GCN'
+	# feature = 'profile'
+	# batch_size = 63
+	# num_layers = 1
+	# hidden_channels = 71
+	# learning_rate = 0.006740435691321102
+	# weight_decay = 0.0007668389545246638
+
+	# politifact
+	# architecture = 'GraphSAGE'
+	# feature = 'profile'
+	# batch_size = 56
+	# num_layers = 2
+	# hidden_channels = 98
+	# learning_rate = 0.0006441931666212645
+	# weight_decay = 0.00024963244437103125
+
+	train_dataset = UPFD(root='data/', name='gossipcop', feature=feature, split='train')
+	val_dataset = UPFD(root='data/', name='gossipcop', feature=feature, split='val')
+	test_dataset = UPFD(root='data/', name='gossipcop', feature=feature, split='test')
 
 	g = torch.Generator()
 	g.manual_seed(SEED)

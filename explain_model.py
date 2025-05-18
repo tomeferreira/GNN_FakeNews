@@ -66,8 +66,8 @@ def explain_model(model, architecture, test_dataset, device, feat_path=None, top
     plt.figure(figsize=(10, 5))
     plt.barh(range(topk), topk_scores.cpu().detach().numpy()[::-1])
     plt.yticks(range(topk), topk_names[::-1])
-    plt.xlabel("Average Importance Score")
-    plt.title(f"Top-{topk} Node Feature Importances (Averaged)")
+    plt.xlabel("Valor de importância médio")
+    plt.title(f"Top-{top_k} features mais importantes (em média)")
     plt.tight_layout()
 
     plt.show()

@@ -1,15 +1,16 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.datasets import UPFD
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import global_mean_pool,GCNConv
 from torch_geometric.nn.conv import SAGEConv
 from torch_geometric.nn.dense import Linear
 from torch_geometric.loader import DataLoader
-from sklearn.manifold import TSNE
-import umap.umap_ as umap
-import matplotlib.pyplot as plt
+from sklearn.metrics import f1_score
 import random
 import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+import umap.umap_ as umap
 
 SEED = 42
 
@@ -17,8 +18,6 @@ def set_seed():
 	torch.manual_seed(SEED)
 	np.random.seed(SEED)
 	random.seed(SEED)
-	torch.backends.cudnn.deterministic = True
-	torch.backends.cudnn.benchmark = False
 	return
 
 '''
@@ -53,7 +52,7 @@ class GraphSAGE(torch.nn.Module):
 		x = F.dropout(x, p=0.5, training=self.training)
 		x = self.lin2(x)
 		return F.log_softmax(x, dim=-1)
-	
+
 	def get_embeddings(self, data, layer="last_hidden"):
 		x, edge_index, batch = data.x, data.edge_index, data.batch
 		x = F.relu(self.conv1(x, edge_index))
@@ -66,6 +65,30 @@ class GraphSAGE(torch.nn.Module):
 			return x.detach().cpu(), data.y.cpu()
 		elif layer == "before_pool":
 			return x.detach().cpu(), data.y.cpu()
+		
+class GCN(torch.nn.Module):
+	def __init__(self, in_channels, hidden_channels, out_channels):
+		super().__init__()
+		self.conv1 = GCNConv(in_channels, hidden_channels)
+		self.conv2 = GCNConv(hidden_channels, hidden_channels)
+		self.lin = torch.nn.Linear(hidden_channels, out_channels)
+
+	def forward(self, x, edge_index, batch):
+		x = self.conv1(x, edge_index)
+		x = F.relu(x)
+		x = self.conv2(x, edge_index)
+		x = F.relu(x)
+		x = global_mean_pool(x, batch)  # Pool node features into graph-level representation
+		return self.lin(x)	
+
+	def get_embeddings(self, data):
+		x, edge_index, batch = data.x, data.edge_index, data.batch
+		x = self.conv1(x, edge_index)
+		x = F.relu(x)
+		x = self.conv2(x, edge_index)
+		x = F.relu(x)
+		x = global_mean_pool(x, batch)  # Graph-level embeddings
+		return x.detach().cpu(), data.y.cpu()  # Return embeddings before final linear layer
 
 '''
 code from: https://www.geeksforgeeks.org/how-to-handle-overfitting-in-pytorch-models-using-early-stopping/
@@ -97,67 +120,6 @@ class EarlyStopping:
 
 def main():
 
-	train_dataset = UPFD(root='data/', name='politifact', feature='bert', split='train')
-	val_dataset = UPFD(root='data/', name='politifact', feature='bert', split='val')
-	test_dataset = UPFD(root='data/', name='politifact', feature='bert', split='test')
-
-	g = torch.Generator()
-	g.manual_seed(SEED)
-
-	train_loader = DataLoader(train_dataset, batch_size=37, shuffle=True, generator=g)
-	val_loader = DataLoader(val_dataset, batch_size=37, generator=g)
-	test_loader = DataLoader(test_dataset, batch_size=37, generator=g)
-
-	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-	model = GraphSAGE(
-		dataset=train_dataset,		 # Needed for num_features and num_classes
-		num_layers=2,				  # You can tune this (e.g., 2 or 3)
-		hidden=49					  # Matches config
-	).to(device)
-
-	optimizer = torch.optim.Adam(model.parameters(), lr=0.006632297252690111, weight_decay=0.0005055585339535605)
-	criterion = torch.nn.CrossEntropyLoss()
-		
-	early_stopping = EarlyStopping(patience=15, delta=0.0005)
-
-	def train():
-		model.train()
-		total_loss = 0
-		for data in train_loader:
-			data = data.to(device)
-			optimizer.zero_grad()
-			out = model(data)
-			loss = criterion(out, data.y)
-			loss.backward()
-			optimizer.step()
-			total_loss += loss.item() * data.num_graphs
-		return total_loss / len(train_loader.dataset)
-	 
-	def evaluate(loader):
-		model.eval()
-		correct = 0
-		for data in loader:
-			data = data.to(device)
-			out = model(data)
-			pred = out.argmax(dim=1)
-			correct += int((pred == data.y).sum())
-		return correct / len(loader.dataset)
-
-	def extract_embeddings(model, loader, device, layer="last_hidden"):
-		model.eval()
-		all_embeddings = []
-		all_labels = []
-
-		with torch.no_grad():
-			for data in loader:
-				data = data.to(device)
-				embeddings, labels = model.get_embeddings(data, layer=layer)
-				all_embeddings.append(embeddings)
-				all_labels.append(labels)
-
-		return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
-
 	def plot_embeddings(embeddings, labels, method="tsne"):
 		if method == "tsne":
 			reducer = TSNE(n_components=2, perplexity=30, learning_rate=200, random_state=SEED)
@@ -168,27 +130,248 @@ def main():
 
 		emb_2d = reducer.fit_transform(embeddings)
 
-		plt.figure(figsize=(8, 6))
-		scatter = plt.scatter(emb_2d[:, 0], emb_2d[:, 1], c=labels, cmap="tab10", alpha=0.7)
+		plt.figure(figsize=(13, 7))
+		scatter = plt.scatter(emb_2d[:, 0], emb_2d[:, 1], c=labels, cmap="bwr", alpha=0.7, marker='o')
 		plt.legend(*scatter.legend_elements(), title="Classes")
 		plt.title(f"{method.upper()} visualization of embeddings")
 		plt.show()
+	
+	
 
-	for epoch in range(1, 101):
-		loss = train()
-		val_acc = evaluate(val_loader)
-		test_acc = evaluate(test_loader)
-		print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
-		early_stopping(loss, model)
-		if early_stopping.early_stop:
-			print("Early stopping")
-			break
+	# architecture = 'GraphSAGE'
+	# feature = 'bert'
+	# batch_size = 52
+	# num_layers = 2
+	# hidden_channels = 68
+	# learning_rate = 0.009398316183710028
+	# weight_decay = 0.0007282433810735896
 
-	embeddings, labels = extract_embeddings(model, test_loader, device, layer="last_hidden")
-	plot_embeddings(embeddings.numpy(), labels.numpy(), method="umap")
+	architecture = 'GCN'
+	feature = 'bert'
+	batch_size = 16
+	num_layers = 4
+	hidden_channels = 101
+	learning_rate = 0.009694408686642666
+	weight_decay = 0.00036526339181066015
+
+	train_dataset = UPFD(root='data/', name='politifact', feature=feature, split='train')
+	val_dataset = UPFD(root='data/', name='politifact', feature=feature, split='val')
+	test_dataset = UPFD(root='data/', name='politifact', feature=feature, split='test')
+
+	g = torch.Generator()
+	g.manual_seed(SEED)
+
+	train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, generator=g)
+	val_loader = DataLoader(val_dataset, batch_size=batch_size, generator=g)
+	test_loader = DataLoader(test_dataset, batch_size=batch_size, generator=g)
+
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+	early_stopping = EarlyStopping(patience=15, delta=0.0005)
+
+	if architecture == 'GraphSAGE':
+		def extract_embeddings(model, loader, device, layer="last_hidden"):
+			model.eval()
+			all_embeddings = []
+			all_labels = []
+
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					embeddings, labels = model.get_embeddings(data, layer=layer)
+					all_embeddings.append(embeddings)
+					all_labels.append(labels)
+
+			return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
+		
+		def extract_embeddings_from_path(model, loader, device, checkpoint_path, layer="last_hidden"):
+			model = GraphSAGE(
+				dataset=train_dataset,
+				num_layers=num_layers,  # must match your config
+				hidden=hidden_channels	  # same here
+			).to(device)
+
+			model.load_state_dict(torch.load(checkpoint_path))
+			model.eval()
+			all_embeddings = []
+			all_labels = []
+
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					embeddings, labels = model.get_embeddings(data, layer=layer)
+					all_embeddings.append(embeddings)
+					all_labels.append(labels)
+
+			return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
+
+		model = GraphSAGE(
+			dataset=train_dataset,		 # Needed for num_features and num_classes
+			num_layers=num_layers,				  # You can tune this (e.g., 2 or 3)
+			hidden=hidden_channels					  # Matches config
+		).to(device)
+
+		optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+		criterion = torch.nn.CrossEntropyLoss()
+		
+		def train():
+			model.train()
+			total_loss = 0
+			for data in train_loader:
+				data = data.to(device)
+				optimizer.zero_grad()
+				out = model(data)
+				loss = criterion(out, data.y)
+				loss.backward()
+				optimizer.step()
+				total_loss += loss.item() * data.num_graphs
+			return total_loss / len(train_loader.dataset)
+		
+		def evaluate(loader):
+			model.eval()
+			all_preds = []
+			all_labels = []
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					out = model(data)
+					pred = out.argmax(dim=1)
+					all_preds.extend(pred.cpu().numpy())
+					all_labels.extend(data.y.cpu().numpy())
+
+			acc = sum(p == t for p, t in zip(all_preds, all_labels)) / len(all_labels)
+			f1 = f1_score(all_labels, all_preds, average='binary')
+			return acc, f1
+
+		list_paths = []
+		for epoch in range(500):
+			loss = train()
+			val_acc, val_f1 = evaluate(val_loader)
+			test_acc, test_f1 = evaluate(test_loader)
+			if epoch==1:
+				list_paths.append(f'model_epoch_{epoch}.pt')
+				torch.save(model.state_dict(), f'model_epoch_{epoch}.pt')
+			if epoch%10==0 and epoch!=0:
+				list_paths.append(f'model_epoch_{epoch}.pt')
+				torch.save(model.state_dict(), f'model_epoch_{epoch}.pt')
+			# 	plot_embeddings(embeddings.numpy(), labels.numpy(), method="umap")
+			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Val F1: {val_f1:.4f}, Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f}')
+			early_stopping(loss, model)
+			if early_stopping.early_stop:
+				print("Early stopping")
+				break
+
+		for path in list_paths:
+			embeddings_end, labels_end = extract_embeddings_from_path(model, test_loader, device, path, layer="last_hidden")
+			plot_embeddings(embeddings_end.numpy(), labels_end.numpy(), method="umap")
+		
+		embeddings_end, labels_end = extract_embeddings(model, test_loader, device, layer="last_hidden")
+		plot_embeddings(embeddings_end.numpy(), labels_end.numpy(), method="umap")
+		
+	elif architecture == 'GCN':
+		
+		def extract_embeddings(model, loader, device):
+			model.eval()
+			all_embeddings = []
+			all_labels = []
+
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					embeddings, labels = model.get_embeddings(data)
+					all_embeddings.append(embeddings)
+					all_labels.append(labels)
+
+			return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
+
+		def extract_embeddings_from_path(model, loader, device, checkpoint_path):
+			model = GCN(
+				in_channels=train_dataset.num_node_features,
+				hidden_channels=hidden_channels,
+				out_channels=2  # Binary classification (real/fake)
+			).to(device)
+
+			model.load_state_dict(torch.load(checkpoint_path))
+			model.eval()
+			all_embeddings = []
+			all_labels = []
+
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					embeddings, labels = model.get_embeddings(data)
+					all_embeddings.append(embeddings)
+					all_labels.append(labels)
+
+			return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
+
+
+		# Instantiate model, optimizer, and define training
+		model = GCN(
+			in_channels=train_dataset.num_node_features,
+			hidden_channels=hidden_channels,
+			out_channels=2  # Binary classification (real/fake)
+		).to(device)
+
+		optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+		criterion = torch.nn.CrossEntropyLoss()
+
+		def train():
+			model.train()
+			total_loss = 0
+			for data in train_loader:
+				data = data.to(device)
+				optimizer.zero_grad()
+				out = model(data.x, data.edge_index, data.batch)
+				loss = criterion(out, data.y)
+				loss.backward()
+				optimizer.step()
+				total_loss += loss.item() * data.num_graphs
+			return total_loss / len(train_loader.dataset)
+
+		def evaluate(loader):
+			model.eval()
+			all_preds = []
+			all_labels = []
+			with torch.no_grad():
+				for data in loader:
+					data = data.to(device)
+					out = model(data.x, data.edge_index, data.batch)
+					pred = out.argmax(dim=1)
+					all_preds.extend(pred.cpu().numpy())
+					all_labels.extend(data.y.cpu().numpy())
+
+			acc = sum(p == t for p, t in zip(all_preds, all_labels)) / len(all_labels)
+			f1 = f1_score(all_labels, all_preds, average='binary')
+			return acc, f1
+
+		list_paths = []
+		for epoch in range(500):
+			loss = train()
+			val_acc, val_f1 = evaluate(val_loader)
+			test_acc, test_f1 = evaluate(test_loader)
+			if epoch==1:
+				list_paths.append(f'model_epoch_{epoch}.pt')
+				torch.save(model.state_dict(), f'model_epoch_{epoch}.pt')
+			if epoch%10==0 and epoch!=0:
+				list_paths.append(f'model_epoch_{epoch}.pt')
+				torch.save(model.state_dict(), f'model_epoch_{epoch}.pt')
+			print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Val F1: {val_f1:.4f}, Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f}')
+			early_stopping(loss, model)
+			if early_stopping.early_stop:
+				print("Early stopping")
+				break
+		
+		for path in list_paths:
+			embeddings_end, labels_end = extract_embeddings_from_path(model, test_loader, device, path)
+			plot_embeddings(embeddings_end.numpy(), labels_end.numpy(), method="umap")
+		
+		embeddings_end, labels_end = extract_embeddings(model, test_loader, device)
+		plot_embeddings(embeddings_end.numpy(), labels_end.numpy(), method="umap")
 
 	return
 
 if __name__=='__main__':
 	set_seed()
+
 	main()

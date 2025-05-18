@@ -1,6 +1,8 @@
 from torch_geometric.explain import Explainer, GNNExplainer
 import math
 import torch
+import torch
+import matplotlib.pyplot as plt
 
 
 def explain_model(model, architecture, test_dataset, device, feat_path=None, top_k=10, subgraph_path=None):
@@ -20,6 +22,20 @@ def explain_model(model, architecture, test_dataset, device, feat_path=None, top
 
     node_index = min(0, sample_data.x.shape[0] - 1)
 
+    if architecture == 'GCN':
+        explanation = explainer(
+            x=sample_data.x,
+            edge_index=sample_data.edge_index,
+            batch=sample_data.batch,
+            index=node_index
+        )
+    elif architecture == 'GraphSAGE':
+        explanation = explainer(
+            x=sample_data.x,
+            edge_index=sample_data.edge_index,
+            batch=sample_data.batch,
+            index=node_index
+        )
     explanation = explainer(
         x=sample_data.x,
         edge_index=sample_data.edge_index,
@@ -37,10 +53,32 @@ def explain_model(model, architecture, test_dataset, device, feat_path=None, top
         explanation.visualize_graph(subgraph_path)
         print(f"Subgraph visualization plot has been saved to '{subgraph_path}'")
 
-    feature_importance = explanation.node_mask[node_index]
-    num_features = feature_importance.shape[0]
-    top_k = max(1, math.ceil(0.05 * num_features))
-    top_indices = torch.topk(feature_importance, top_k).indices.tolist()
-    print(f"Top 5% feature indices for node {node_index}: {top_indices}")
+    feature_names = ['Verified', 'Enable geo-spatial positioning', 'Followers count', 'Friends count', 'Status count', 'Favorite count', 'Number of lists',
+                     'Created time (No. of months since Twitter established)', 'Number of words in the description', 'Number of words in the screen name']
 
-    return top_indices
+    feature_mask = explanation.node_mask  # shape: [num_features]
+
+    avg_feature_mask = feature_mask.mean(dim=0)
+
+    # Get top-K most important features (optional)
+    topk_indices = avg_feature_mask.topk(top_k).indices.tolist()
+    print(topk_indices)
+    topk_names = [feature_names[i] for i in topk_indices]
+
+    print(f"Top {top_k} important features:")
+    topk_scores = avg_feature_mask[torch.tensor(topk_indices)]
+
+    for i, (name, score) in enumerate(zip(topk_names, topk_scores)):
+        print(f"{i+1}. {name}: {score.item():.4f}")
+
+    # Plot
+    plt.figure(figsize=(10, 5))
+    plt.barh(range(top_k), topk_scores.cpu().detach().numpy()[::-1])
+    plt.yticks(range(top_k), topk_names[::-1])
+    plt.xlabel("Valor de importância médio")
+    plt.title(f"Top-{top_k} features mais importantes (em média)")
+    plt.tight_layout()
+
+    plt.show()
+
+    return topk_indices

@@ -1,5 +1,6 @@
 wandb/*
 data/*
+images/*
 
 # Python cache
 __pycache__/

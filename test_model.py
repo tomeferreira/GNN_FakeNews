@@ -1,4 +1,5 @@
 import torch
+import math
 import torch.nn.functional as F
 from torch_geometric.datasets import UPFD
 from torch_geometric.nn import global_mean_pool,GCNConv
@@ -10,6 +11,7 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
+from torch_geometric.data import Dataset
 import umap.umap_ as umap
 from explain_model import explain_model
 
@@ -20,6 +22,19 @@ def set_seed():
 	np.random.seed(SEED)
 	random.seed(SEED)
 	return
+
+class TopIndicesDataset(Dataset):
+    def __init__(self, original_dataset, top_indices):
+        self.dataset = original_dataset
+        self.top_indices = top_indices
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        data = self.dataset[idx].clone()
+        data.x = data.x[:, self.top_indices]
+        return data
 
 '''
 Code from: https://wandb.ai/graph-neural-networks/GraphSAGE/reports/An-Introduction-to-GraphSAGE--Vmlldzo1MTEwNzQ1
@@ -43,8 +58,7 @@ class GraphSAGE(torch.nn.Module):
 		self.lin2.reset_parameters()
 
 
-	def forward(self, data):
-		x, edge_index, batch = data.x, data.edge_index, data.batch
+	def forward(self, x, edge_index, batch):
 		x = F.relu(self.conv1(x, edge_index))
 		for conv in self.convs:
 			x = F.relu(conv(x, edge_index))
@@ -143,16 +157,16 @@ def main():
 		return torch.cat(all_embeddings, dim=0), torch.cat(all_labels, dim=0)
 
 	architecture = 'GraphSAGE'
-	feature = 'bert'
-	batch_size = 52
-	num_layers = 2
-	hidden_channels = 68
-	learning_rate = 0.009398316183710028
-	weight_decay = 0.0007282433810735896
+	feature = 'spacy'
+	batch_size = 21
+	num_layers = 3
+	hidden_channels = 118
+	learning_rate = 0.0073
+	weight_decay = 0.00034
 
-	train_dataset = UPFD(root='data/', name='politifact', feature=feature, split='train')
-	val_dataset = UPFD(root='data/', name='politifact', feature=feature, split='val')
-	test_dataset = UPFD(root='data/', name='politifact', feature=feature, split='test')
+	train_dataset = UPFD(root='data/', name='gossipcop', feature=feature, split='train')
+	val_dataset = UPFD(root='data/', name='gossipcop', feature=feature, split='val')
+	test_dataset = UPFD(root='data/', name='gossipcop', feature=feature, split='test')
 
 	g = torch.Generator()
 	g.manual_seed(SEED)
@@ -203,7 +217,7 @@ def main():
 			for data in train_loader:
 				data = data.to(device)
 				optimizer.zero_grad()
-				out = model(data)
+				out = model(data.x, data.edge_index, data.batch)
 				loss = criterion(out, data.y)
 				loss.backward()
 				optimizer.step()
@@ -217,7 +231,7 @@ def main():
 			with torch.no_grad():
 				for data in loader:
 					data = data.to(device)
-					out = model(data)
+					out = model(data.x, data.edge_index, data.batch)
 					pred = out.argmax(dim=1)
 					all_preds.extend(pred.cpu().numpy())
 					all_labels.extend(data.y.cpu().numpy())
@@ -300,7 +314,7 @@ def main():
 				break
 
 
-	explain_model(
+	top_indices = explain_model(
 		model,
 		architecture,
 		test_dataset,
@@ -309,6 +323,66 @@ def main():
 		top_k=10,
 		subgraph_path=f'subgraph_GraphSAGE.png'
 	)
+
+	# Create new datasets with only top features
+	train_dataset_top = TopIndicesDataset(train_dataset, top_indices)
+	val_dataset_top = TopIndicesDataset(val_dataset, top_indices)
+	test_dataset_top = TopIndicesDataset(test_dataset, top_indices)
+
+	# Create new DataLoaders
+	train_loader_top = DataLoader(train_dataset_top, batch_size=batch_size, shuffle=True, generator=g)
+	val_loader_top = DataLoader(val_dataset_top, batch_size=batch_size, generator=g)
+	test_loader_top = DataLoader(test_dataset_top, batch_size=batch_size, generator=g)
+	
+	in_channels = len(top_indices)
+	model_top = GraphSAGE(
+		dataset=train_dataset_top, 
+		num_layers=num_layers,
+		hidden=hidden_channels
+	).to(device)
+
+	optimizer_top = torch.optim.Adam(model_top.parameters(), lr=learning_rate, weight_decay=weight_decay)
+	criterion_top = torch.nn.CrossEntropyLoss()
+
+	def train_top():
+		model_top.train()
+		total_loss = 0
+		for data in train_loader_top:
+			data = data.to(device)
+			optimizer_top.zero_grad()
+			out = model_top(data.x, data.edge_index, data.batch)
+			loss = criterion_top(out, data.y)
+			loss.backward()
+			optimizer_top.step()
+			total_loss += loss.item() * data.num_graphs
+		return total_loss / len(train_loader_top.dataset)
+
+	def evaluate_top(loader):
+		model_top.eval()
+		all_preds = []
+		all_labels = []
+		with torch.no_grad():
+			for data in loader:
+				data = data.to(device)
+				out = model_top(data.x, data.edge_index, data.batch)
+				pred = out.argmax(dim=1)
+				all_preds.extend(pred.cpu().numpy())
+				all_labels.extend(data.y.cpu().numpy())
+		acc = sum(p == t for p, t in zip(all_preds, all_labels)) / len(all_labels)
+		f1 = f1_score(all_labels, all_preds, average='binary')
+		return acc, f1
+
+	# Training loop for the reduced model
+	early_stopping_top = EarlyStopping(patience=15, delta=0.0005)
+	for epoch in range(500):
+		loss = train_top()
+		val_acc, val_f1 = evaluate_top(val_loader_top)
+		test_acc, test_f1 = evaluate_top(test_loader_top)
+		print(f'[Top 5%] Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Val F1: {val_f1:.4f}, Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f}')
+		early_stopping_top(loss, model_top)
+		if early_stopping_top.early_stop:
+			print("[Top 5%] Early stopping")
+			break
 
 	return
 

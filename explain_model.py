@@ -1,4 +1,6 @@
 from torch_geometric.explain import Explainer, GNNExplainer
+import math
+import torch
 
 
 def explain_model(model, architecture, test_dataset, device, feat_path=None, top_k=10, subgraph_path=None):
@@ -18,19 +20,12 @@ def explain_model(model, architecture, test_dataset, device, feat_path=None, top
 
     node_index = min(0, sample_data.x.shape[0] - 1)
 
-    if architecture == 'GCN':
-        explanation = explainer(
-            x=sample_data.x,
-            edge_index=sample_data.edge_index,
-            batch=sample_data.batch,
-            index=node_index
-        )
-    elif architecture == 'GraphSAGE':
-        explanation = explainer(
-            x=sample_data.x,
-            edge_index=sample_data.edge_index,
-            index=node_index
-        )
+    explanation = explainer(
+        x=sample_data.x,
+        edge_index=sample_data.edge_index,
+        batch=sample_data.batch,
+        index=node_index
+    )
 
     print(f'Generated explanations in {explanation.available_explanations}')
 
@@ -41,3 +36,11 @@ def explain_model(model, architecture, test_dataset, device, feat_path=None, top
     if subgraph_path is not None:
         explanation.visualize_graph(subgraph_path)
         print(f"Subgraph visualization plot has been saved to '{subgraph_path}'")
+
+    feature_importance = explanation.node_mask[node_index]
+    num_features = feature_importance.shape[0]
+    top_k = max(1, math.ceil(0.05 * num_features))
+    top_indices = torch.topk(feature_importance, top_k).indices.tolist()
+    print(f"Top 5% feature indices for node {node_index}: {top_indices}")
+
+    return top_indices

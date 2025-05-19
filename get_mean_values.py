@@ -65,6 +65,9 @@ def main():
 				else:
 					fake.append(data.x[i])
 	
+	print(np.array(fake).shape)
+	print(np.array(real).shape)
+
 	print(np.mean(fake,axis=0))
 	print(np.mean(real,axis=0))
 
